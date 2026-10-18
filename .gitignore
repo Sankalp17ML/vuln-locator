@@ -1,0 +1,68 @@
+# ==============================================================================
+# VulnLocator .gitignore
+# ==============================================================================
+
+# Large Model Weights & Checkpoints (Excludes ~500MB weights)
+models/*
+!models/README.md
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Datasets (Excludes ~50MB CSV files)
+data/*
+!data/download.py
+!data/README.md
+*.csv
+*.parquet
+*.jsonl
+
+# Python Virtual Environments & Packages
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE, OS & Editor Caches
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Environment variables & secrets
+.env
+.env.local

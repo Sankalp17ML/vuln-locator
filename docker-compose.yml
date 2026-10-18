@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vulnlocator-api
+    ports:
+      - "8000:8000"
+    environment:
+      - VULNLOCATOR_DEVICE=cpu
+      - VULNLOCATOR_THRESHOLD=0.5
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vulnlocator-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - VULNLOCATOR_API_URL=http://api:8000
+    command: ["streamlit", "run", "app/ui.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    depends_on:
+      - api
+    restart: unless-stopped
