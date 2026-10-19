@@ -59,11 +59,15 @@ class CodeAnalyzer:
         code: str,
         top_k: int = 10,
         include_localization: bool = True,
+        threshold: float | None = None,
     ) -> dict[str, Any]:
         if not code.strip():
             raise ValueError("Code input must not be empty.")
         if not 1 <= top_k <= 50:
             raise ValueError("top_k must be between 1 and 50.")
+        active_threshold = self.threshold if threshold is None else threshold
+        if not 0.0 <= active_threshold <= 1.0:
+            raise ValueError("Threshold must be between 0 and 1.")
 
         encoded = self.tokenizer(
             code,
@@ -98,7 +102,7 @@ class CodeAnalyzer:
             else:
                 findings = []
 
-        vulnerable = vulnerable_probability >= self.threshold
+        vulnerable = vulnerable_probability >= active_threshold
         return {
             "vulnerable": vulnerable,
             "label": "Vulnerable" if vulnerable else "Safe",
@@ -106,7 +110,7 @@ class CodeAnalyzer:
                 vulnerable_probability if vulnerable else 1.0 - vulnerable_probability
             ),
             "vulnerable_probability": vulnerable_probability,
-            "threshold": self.threshold,
+            "threshold": active_threshold,
             "device": str(self.device),
             "findings": findings,
         }
