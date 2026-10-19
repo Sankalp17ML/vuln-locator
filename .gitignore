@@ -14,6 +14,7 @@ models/*
 # Datasets (Excludes ~50MB CSV files)
 data/*
 !data/download.py
+!data/download_multilingual.py
 !data/README.md
 *.csv
 *.parquet

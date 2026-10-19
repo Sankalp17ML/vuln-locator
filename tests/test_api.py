@@ -13,7 +13,15 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "ok")
-        self.assertTrue(data["model_available"])
+        self.assertTrue(data["specialist_available"])
+
+    def test_models_endpoint(self):
+        response = self.client.get("/models")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("specialist", data)
+        self.assertIn("generalist", data)
+        self.assertTrue(data["specialist"]["available"])
 
     def test_predict_endpoint_valid(self):
         payload = {
@@ -27,7 +35,20 @@ class TestAPI(unittest.TestCase):
         self.assertIn("vulnerable", data)
         self.assertIn("confidence", data)
         self.assertIn("findings", data)
+        self.assertIn("model_used", data)
+        self.assertIn("detected_language", data)
+        self.assertIn("routing_reason", data)
         self.assertLessEqual(len(data["findings"]), 5)
+
+    def test_predict_routes_c_to_specialist(self):
+        payload = {
+            "code": "void copy(char *s) { char buf[10]; strcpy(buf, s); }",
+            "top_k": 5,
+        }
+        response = self.client.post("/predict", json=payload)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("Specialist", data["model_used"])
 
     def test_predict_endpoint_empty(self):
         response = self.client.post("/predict", json={"code": "   "})

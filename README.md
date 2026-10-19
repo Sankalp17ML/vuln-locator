@@ -16,15 +16,16 @@
 1. [The Problem Statement](#-the-problem-statement)
 2. [Key Features](#-key-features)
 3. [System Architecture](#-system-architecture)
-4. [Dataset & Class Imbalance](#-dataset--class-imbalance)
-5. [Training & Pipeline Optimizations (Kaggle Dual T4)](#-training--pipeline-optimizations-kaggle-dual-t4)
-6. [Empirical Results & Benchmarks](#-empirical-results--benchmarks)
-7. [Attention Rollout (Interpretability)](#-attention-rollout-interpretability)
-8. [Quickstart & Installation](#-quickstart--installation)
-9. [Docker & Containerized Deployment](#-docker--containerized-deployment)
-10. [API Reference](#-api-reference)
-11. [Project Structure](#-project-structure)
-12. [Resume Bullets & Interview Talking Points](#-resume-bullets--interview-talking-points)
+4. [V2.0 Architecture: Mixture of Experts (Specialist vs. Generalist)](#-v20-architecture-mixture-of-experts)
+5. [Dataset & Class Imbalance](#-dataset--class-imbalance)
+6. [Training & Pipeline Optimizations (Kaggle Dual T4)](#-training--pipeline-optimizations-kaggle-dual-t4)
+7. [Empirical Results & Benchmarks](#-empirical-results--benchmarks)
+8. [Attention Rollout (Interpretability)](#-attention-rollout-interpretability)
+9. [Quickstart & Installation](#-quickstart--installation)
+10. [Docker & Containerized Deployment](#-docker--containerized-deployment)
+11. [API Reference](#-api-reference)
+12. [Project Structure](#-project-structure)
+13. [Resume Bullets & Interview Talking Points](#-resume-bullets--interview-talking-points)
 
 ---
 
@@ -92,6 +93,62 @@ flowchart TD
     CLASSIF --> UI
     TOKENS --> UI
 ```
+
+---
+
+## 🔀 V2.0 Architecture: Mixture of Experts
+
+In VulnLocator V2.0, we expanded support to multiple languages (**Java, PHP, JavaScript, Python**) while preventing **Catastrophic Forgetting**—a well-known failure mode where fine-tuning a neural network on high-level web languages degrades its memory of low-level C/C++ memory corruption patterns (e.g., buffer overflows, integer overflows, use-after-free).
+
+### The Strategy: Option B (Specialist vs. Generalist Architecture)
+Rather than naively merging disparate vulnerability datasets into a single compromised model, VulnLocator deploys a **Mini-Mixture of Experts (MoE) Router**:
+
+1. **Specialist Model (C/C++):**
+   - **Path:** `models/codebert-baseline`
+   - **Dataset:** Fine-tuned on PrimeVul C/C++ vulnerability benchmarks.
+   - **Domain Focus:** Low-level memory safety, pointer arithmetic, manual memory allocation (`malloc`, `free`), buffer boundaries, kernel vulnerabilities.
+2. **Generalist Model (Multilingual):**
+   - **Path:** `models/codebert-multilingual`
+   - **Dataset:** Fine-tuned on CrossVul benchmarks spanning Java, Python, PHP, JavaScript, Go, Ruby, and C#.
+   - **Domain Focus:** Web security, injection vulnerabilities (SQLi, Command Injection, XSS, SSRF), insecure deserialization, cryptographic flaws.
+3. **Language Router Engine (`src/router.py` & `app/main.py`):**
+   - Automatically inspects code syntax, keywords, and structural markers.
+   - Intelligently routes code to the optimal expert model with zero manual configuration required.
+   - Allows explicit user overrides (`model: "specialist" | "generalist" | "auto"`).
+
+```mermaid
+flowchart TD
+    INPUT["Source Code Snippet<br>(Input to /predict)"] --> CLEAN["Syntax Preprocessor<br>(Strip Comments & Docstrings)"]
+    CLEAN --> ROUTER{"Router Engine<br>(src/router.py)"}
+
+    ROUTER -->|"#include, malloc, std::, ->, struct"| SPECIALIST["C/C++ Specialist Model<br>(models/codebert-baseline)"]
+    ROUTER -->|"import java, <?php, const, def, require"| GENERALIST["Multilingual Generalist Model<br>(models/codebert-multilingual)"]
+    ROUTER -->|"Manual Model Override"| OVERRIDE["User-Selected Model"]
+
+    SPECIALIST --> ATTN["Attention Rollout Interpretability Engine"]
+    GENERALIST --> ATTN
+    OVERRIDE --> ATTN
+
+    ATTN --> RESP["Enriched Response<br>(Vulnerability Verdict + Token Weights + Model Provenance)"]
+```
+
+### Syntax Routing Logic
+The router evaluates syntax tokens and structural keywords:
+- **C/C++ Indicators ➔ Specialist Model:** `#include`, `malloc(`, `free(`, `std::`, `printf(`, `sprintf(`, `scanf(`, `sizeof(`, `uint8_t`, `typedef struct`, pointer arrows `->`.
+- **Multilingual Indicators ➔ Generalist Model:**
+  - **Java:** `import java`, `package `, `public class `, `System.out.println`, `throws Exception`.
+  - **PHP:** `<?php`, `$_GET`, `$_POST`, `mysql_query`, `mysqli_`, `echo $`.
+  - **JavaScript / TypeScript:** `const `, `let `, `function `, `console.log`, `module.exports`, `require(`, `eval(`.
+  - **Python:** `def `, `import `, `from `, `__name__`, `print(`, `cursor.execute`.
+  - **Go / Ruby / C#:** `func `, `fmt.Println`, `def `, `using System`.
+
+### Anti-Lexical Bias & AST Comment Stripping
+Machine learning models trained on source code often develop **lexical bias**—latching onto English words inside comments (such as `// fix CVE-2021-1234` or `# vulnerable buffer`) rather than the underlying syntactic bug. 
+
+VulnLocator V2.0 integrates `src/preprocessor.py`:
+- Strips single-line comments (`//`, `#`), block comments (`/* */`), and Python docstrings (`"""`, `'''`).
+- **Preserves exact line numbers and byte offsets** using newline alignment so that token localization accurately maps back to the developer's original code.
+- Eliminates natural language bias while ensuring CodeBERT attends purely to executable syntax.
 
 ---
 
@@ -288,19 +345,29 @@ docker compose down
 ```json
 {
   "status": "ok",
-  "model_available": true
+  "specialist_available": true,
+  "generalist_available": true,
+  "version": "2.0.0",
+  "architecture": "Mixture-of-Experts (Router)"
 }
 ```
 
-### Vulnerability Prediction & Localization
+### Models Registry
+`GET /models`
+Returns availability status, file paths, and target languages for both Specialist and Generalist models.
+
+### Smart Prediction & Localization (Auto-Routed)
 `POST /predict`
+
+Automatically routes code based on language detection, strips natural language comments to eliminate lexical bias, runs inference on the expert model, and generates Attention Rollout heatmaps.
 
 **Request:**
 ```json
 {
-  "code": "def run_cmd(user_input):\n    os.system('ping ' + user_input)",
+  "code": "const userInput = req.query.cmd;\neval(userInput);",
   "top_k": 5,
-  "include_localization": true
+  "include_localization": true,
+  "model": "auto"
 }
 ```
 
@@ -309,32 +376,42 @@ docker compose down
 {
   "vulnerable": true,
   "label": "Vulnerable",
-  "confidence": 0.842,
-  "vulnerable_probability": 0.842,
+  "confidence": 0.503,
+  "vulnerable_probability": 0.503,
   "threshold": 0.50,
-  "device": "cpu",
+  "device": "cuda",
   "findings": [
     {
-      "token": "system",
-      "text": "system",
-      "score": 1.0,
-      "start": 35,
-      "end": 41,
+      "token": "eval",
+      "text": "eval",
+      "score": 0.785,
+      "start": 33,
+      "end": 37,
       "line": 2,
-      "line_text": "    os.system('ping ' + user_input)"
+      "line_text": "eval(userInput);"
     },
     {
-      "token": "os",
-      "text": "os",
-      "score": 0.89,
-      "start": 32,
-      "end": 34,
-      "line": 2,
-      "line_text": "    os.system('ping ' + user_input)"
+      "token": "cmd",
+      "text": "cmd",
+      "score": 0.725,
+      "start": 28,
+      "end": 31,
+      "line": 1,
+      "line_text": "const userInput = req.query.cmd;"
     }
-  ]
+  ],
+  "preprocessed": true,
+  "comments_stripped": 0,
+  "comment_chars_removed": 0,
+  "model_used": "Multilingual Generalist (CrossVul)",
+  "detected_language": "javascript",
+  "routing_reason": "Detected Javascript syntax -> Routed to Multilingual Generalist Model."
 }
 ```
+
+### Direct Model Endpoints
+- `POST /predict/specialist` — Explicitly evaluates code using `models/codebert-baseline` (C/C++ PrimeVul).
+- `POST /predict/generalist` — Explicitly evaluates code using `models/codebert-multilingual` (CrossVul).
 
 ---
 
@@ -343,34 +420,42 @@ docker compose down
 ```text
 vuln-locator/
 ├── app/
-│   ├── main.py                     # FastAPI REST application & endpoints
-│   └── ui.py                       # Streamlit web interface & visualizations
+│   ├── main.py                          # FastAPI REST application & MoE router endpoints
+│   └── ui.py                            # Streamlit web interface with language routing & badges
 ├── data/
-│   ├── download.py                 # Dataset download script for colin/PrimeVul
-│   ├── README.md                   # Dataset schema and usage documentation
-│   └── primevul_sample.csv         # 20k sample CSV (excluded from git)
+│   ├── download.py                      # PrimeVul C/C++ dataset download script
+│   ├── download_multilingual.py         # CrossVul multilingual dataset downloader
+│   ├── README.md                        # Dataset schemas and benchmarks
+│   ├── primevul_sample.csv              # 20k C/C++ sample CSV (excluded from git)
+│   └── multilingual_sample.csv          # 5.4k Multilingual sample CSV (excluded from git)
 ├── models/
-│   ├── README.md                   # Model weight placement instructions
-│   └── codebert-baseline/          # Trained weights (safetensors, configs)
+│   ├── README.md                        # Model weight directory documentation
+│   ├── codebert-baseline/               # Specialist weights (PrimeVul C/C++)
+│   └── codebert-multilingual/           # Generalist weights (CrossVul Multilingual)
 ├── notebooks/
-│   └── kaggle_training_dual_t4.ipynb # Dual T4 GPU training notebook
+│   ├── kaggle_training_dual_t4.ipynb    # Dual T4 GPU training notebook (Specialist)
+│   └── kaggle_training_multilingual.ipynb # Dual T4 GPU training notebook (Generalist)
 ├── src/
-│   ├── evaluate.py                 # Evaluation CLI for ROC-AUC & metrics
-│   ├── inference.py                # Core CodeAnalyzer & Attention Rollout math
-│   ├── localize.py                 # CLI tool for interactive token localization
-│   ├── train_baseline.py           # Standard training script
-│   ├── train_kaggle_dual_t4.py     # Dual T4 multi-GPU training pipeline
-│   └── train_local.py              # Local training runner
+│   ├── evaluate.py                      # Evaluation CLI for ROC-AUC & metrics
+│   ├── inference.py                     # Core CodeAnalyzer & Attention Rollout math
+│   ├── localize.py                      # CLI tool for interactive token localization
+│   ├── preprocessor.py                  # AST/regex comment stripper & lexical bias filter
+│   ├── router.py                        # Language detection & MoE routing engine
+│   ├── train_baseline.py                # Specialist training script (PrimeVul)
+│   ├── train_multilingual.py            # Generalist training script (CrossVul)
+│   └── train_kaggle_dual_t4.py          # Dual T4 multi-GPU training pipeline
 ├── tests/
-│   ├── test_api.py                 # API integration tests
-│   └── test_inference.py           # Model inference & localization unit tests
-├── .dockerignore                   # Docker exclusion rules
-├── .gitignore                      # Git exclusion rules (ignores >500MB weights)
-├── docker-compose.yml              # Multi-container orchestration (API + UI)
-├── Dockerfile                      # Production Docker container definition
-├── Makefile                        # Build and test shortcuts
-├── requirements.txt                # Python package dependencies
-└── README.md                       # Comprehensive project documentation
+│   ├── test_api.py                      # API integration tests & router endpoint tests
+│   ├── test_inference.py                # Model inference & localization unit tests
+│   ├── test_preprocessor.py             # Comment stripping & bias removal unit tests
+│   └── test_router.py                   # Language detection & MoE routing unit tests
+├── .dockerignore                        # Docker exclusion rules
+├── .gitignore                           # Git exclusion rules (ignores >500MB weights)
+├── docker-compose.yml                   # Multi-container orchestration (API + UI)
+├── Dockerfile                           # Production Docker container definition
+├── Makefile                             # Build, test, and run shortcuts
+├── requirements.txt                     # Python package dependencies
+└── README.md                            # Comprehensive project documentation
 ```
 
 ---
@@ -378,10 +463,12 @@ vuln-locator/
 ## 💼 Resume Bullets & Interview Talking Points
 
 ### Ready-to-Use Resume Bullets
-> - **Engineered VulnLocator**, an end-to-end vulnerability detection and triage system using **CodeBERT** and **FastAPI**, achieving an **AUC of 0.855** on the **PrimeVul** benchmark against extreme 97/3 class imbalance.
+> - **Engineered VulnLocator V2.0**, an enterprise multilingual vulnerability triage system utilizing a **Mixture-of-Experts (MoE) Router Architecture** with **CodeBERT**, mitigating catastrophic forgetting across C/C++, Java, PHP, JavaScript, and Python.
+> - **Designed a Specialist vs. Generalist Router** routing low-level memory bugs (`malloc`, `std::`) to a PrimeVul C/C++ expert and web/injection flaws (`eval`, `$_GET`, `SELECT`) to a CrossVul multilingual expert.
+> - **Built an AST-based syntax preprocessor** to eliminate lexical and comment bias while preserving exact byte offsets for token localization heatmaps.
 > - **Optimized deep learning training pipelines** on Kaggle Dual NVIDIA T4 GPUs via **pre-tokenized TensorDatasets**, multi-GPU `DataParallel`, and FP16 mixed precision, slashing epoch runtime from **2 hours to 40 seconds** (180x speedup).
-> - **Implemented Attention Rollout** across 12 transformer layers with residual connections, transforming a black-box classifier into an interpretable security tool that highlights precise vulnerable tokens (`strcpy`, `SELECT`, `system`).
-> - **Containerized microservice architecture** using **Docker Compose**, pairing an asynchronous FastAPI prediction engine with an interactive **Streamlit** triage dashboard and automated test suite.
+> - **Implemented Attention Rollout** across 12 transformer layers with residual connections, transforming black-box classifiers into an interpretable security tool that highlights precise vulnerable tokens (`strcpy`, `SELECT`, `eval`, `system`).
+> - **Containerized microservice architecture** using **Docker Compose**, pairing an asynchronous FastAPI prediction engine with an interactive **Streamlit** triage dashboard and 24 automated unit/integration tests.
 
 ### Key Interview Discussion Topics
 1. **Handling Severe Class Imbalance:** Explain why standard accuracy is misleading on a 97:3 dataset and how inverse-frequency weighted cross-entropy shifts decision boundaries towards the minority class.
