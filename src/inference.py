@@ -6,6 +6,9 @@ import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
+from src.preprocessor import strip_comments_preserve_offsets, filter_syntactic_findings
+
+
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[1] / "models" / "codebert-baseline"
 MAX_LENGTH = 512
 
@@ -60,6 +63,9 @@ class CodeAnalyzer:
         top_k: int = 10,
         include_localization: bool = True,
         threshold: float | None = None,
+        strip_comments: bool = True,
+        filter_punctuation: bool = True,
+        strip_headers: bool = False,
     ) -> dict[str, Any]:
         if not code.strip():
             raise ValueError("Code input must not be empty.")
@@ -69,8 +75,15 @@ class CodeAnalyzer:
         if not 0.0 <= active_threshold <= 1.0:
             raise ValueError("Threshold must be between 0 and 1.")
 
-        encoded = self.tokenizer(
+        # Strip comments & natural language cues to focus strictly on code syntax
+        input_code, stats = strip_comments_preserve_offsets(
             code,
+            strip_comments=strip_comments,
+            strip_headers=strip_headers,
+        )
+
+        encoded = self.tokenizer(
+            input_code,
             return_tensors="pt",
             truncation=True,
             max_length=MAX_LENGTH,
@@ -92,12 +105,18 @@ class CodeAnalyzer:
                 if not outputs.attentions:
                     raise RuntimeError("The model did not return attention weights for localization.")
                 importance = self._attention_rollout(outputs.attentions)
-                findings = self._top_findings(
+                raw_findings = self._top_findings(
                     code,
                     encoded["input_ids"][0],
                     offsets[0],
                     importance,
-                    top_k,
+                    top_k=max(top_k * 3, 30),
+                )
+                findings = filter_syntactic_findings(
+                    raw_findings,
+                    top_k=top_k,
+                    filter_punctuation=filter_punctuation,
+                    filter_boilerplate_headers=strip_headers,
                 )
             else:
                 findings = []
@@ -113,6 +132,9 @@ class CodeAnalyzer:
             "threshold": active_threshold,
             "device": str(self.device),
             "findings": findings,
+            "preprocessed": strip_comments or strip_headers,
+            "comments_stripped": stats["comments_found"],
+            "comment_chars_removed": stats["comment_chars_removed"],
         }
 
     def predict_probabilities(self, code_samples: list[str], batch_size: int = 8) -> list[float]:

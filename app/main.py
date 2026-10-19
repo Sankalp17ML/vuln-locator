@@ -21,6 +21,9 @@ class PredictionRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=50)
     include_localization: bool = True
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    strip_comments: bool = True
+    filter_punctuation: bool = True
+    strip_headers: bool = False
 
 
 class Finding(BaseModel):
@@ -41,6 +44,9 @@ class PredictionResponse(BaseModel):
     threshold: float
     device: str
     findings: list[Finding]
+    preprocessed: bool = False
+    comments_stripped: int = 0
+    comment_chars_removed: int = 0
 
 
 @lru_cache(maxsize=1)
@@ -77,4 +83,7 @@ def predict(request: PredictionRequest) -> dict:
         top_k=request.top_k,
         include_localization=request.include_localization,
         threshold=request.threshold,
+        strip_comments=request.strip_comments,
+        filter_punctuation=request.filter_punctuation,
+        strip_headers=request.strip_headers,
     )
